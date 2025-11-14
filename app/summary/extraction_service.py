@@ -124,11 +124,35 @@ class BenchmarkExtractionService:
             # Prepare benchmark summary for AI
             benchmark_summary = self._format_benchmarks_for_ai(benchmarks)
             
-            # Prepare attachments summary
-            attachments_summary = "\n".join([
-                f"- {att.get('filename', 'Unknown')}: {att.get('content_type', 'Unknown type')}"
-                for att in attachments_info
-            ]) if attachments_info else "No attachments"
+            # Prepare enhanced attachments summary with Excel data
+            attachments_summary_parts = []
+            for att in attachments_info:
+                filename = att.get('filename', 'Unknown')
+                content_type = att.get('content_type', 'Unknown type')
+                
+                att_line = f"- {filename} ({content_type})"
+                
+                # Add Excel data summary if available
+                if att.get('excel_summary'):
+                    excel = att['excel_summary']
+                    att_line += f"\n  Excel Data: {excel.get('total_rows', 0)} rows across {len(excel.get('sheets', []))} sheets"
+                    
+                    # Add column information
+                    for sheet_name, sheet_info in excel.get('columns', {}).items():
+                        columns = sheet_info.get('columns', [])
+                        if columns:
+                            att_line += f"\n  Sheet '{sheet_name}': {', '.join(columns[:5])}"
+                            if len(columns) > 5:
+                                att_line += f" ... ({len(columns)} total columns)"
+                    
+                    # Add data preview
+                    data_preview = excel.get('data_preview', {})
+                    if data_preview:
+                        att_line += f"\n  Contains pricing/specification data"
+                
+                attachments_summary_parts.append(att_line)
+            
+            attachments_summary = "\n".join(attachments_summary_parts) if attachments_summary_parts else "No attachments"
             
             # Create AI prompt
             prompt = f"""You are analyzing a vendor quotation email against project material benchmarks.
