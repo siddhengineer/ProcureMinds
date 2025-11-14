@@ -7,8 +7,7 @@ class Settings(BaseSettings):
     db_name: str
     db_user: str
     db_password: str
-    gemini_api_key: str
-    gemini_model: str
+    openai_api_key: str
 
     @property
     def database_url(self) -> str:
