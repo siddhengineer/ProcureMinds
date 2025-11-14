@@ -24,6 +24,10 @@ class Settings(BaseSettings):
     # Frontend URL
     frontend_url: str = "http://localhost:3000"
 
+    # Gemini API Configuration
+    gemini_api_key: str = ""
+    gemini_model: str = ""
+
     @property
     def database_url(self) -> str:
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
