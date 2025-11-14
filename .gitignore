@@ -9,3 +9,8 @@ wheels/
 # Virtual environments
 .venv
 .env
+
+# Google Gmail API credentials
+credentials.json
+token.pickle
+token.json
