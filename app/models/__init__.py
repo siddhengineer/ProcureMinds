@@ -14,6 +14,7 @@ from app.models.rule_set import RuleSet
 from app.models.rule_item import RuleItem
 from app.models.user import User
 from app.models.project_gmail_tokens import ProjectGmailToken
+from app.models.emails import Email
 
 __all__ = [
 	"Workflow",
@@ -27,4 +28,5 @@ __all__ = [
 	"RuleSet",
 	"RuleItem",
 	"ProjectGmailToken",
+	"Email",
 ]

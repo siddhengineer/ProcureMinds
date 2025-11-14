@@ -13,8 +13,8 @@ from app.core.database import Base
 class ProjectGmailToken(Base):
     __tablename__ = "project_gmail_tokens"
 
-    id = Column(Integer, primary_key=True, index=True)
-    project_id = Column(UUID(as_uuid=True), ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False, unique=True)
+    project_gmail_id = Column(Integer, primary_key=True, index=True)
+    project_id = Column(Integer, ForeignKey("projects.project_id", ondelete="CASCADE"), nullable=False)
     email = Column(String(255), nullable=False)
     access_token = Column(Text, nullable=False)
     refresh_token = Column(Text, nullable=False)

@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # Frontend URL
     frontend_url: str = "http://localhost:3000"
 
+    # JWT Configuration
+    jwt_secret_key: str
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
     # Gemini API Configuration
     gemini_api_key: str = ""
     gemini_model: str = ""

@@ -27,10 +27,6 @@ class BenchmarkMaterial(Base):
         nullable=True,
     )
     name = Column(String(100), nullable=False)  # e.g., OPC 53, Fine Sand
-    material_state = Column(
-        Enum("solid", "liquid", name="material_state_enum"),
-        nullable=False,
-    )
     quality_standard = Column(String(100))  # e.g., IS 12269
     default_quantity_per_m3 = Column(
         Numeric,
@@ -53,11 +49,5 @@ class BenchmarkMaterial(Base):
     project = relationship("Project")
     category = relationship("BenchmarkCategory")
 
-    __table_args__ = (
-        CheckConstraint(
-            "(material_state = 'liquid' AND quantity IS NOT NULL AND default_quantity_per_m3 IS NULL) OR "
-            "(material_state = 'solid' AND default_quantity_per_m3 IS NOT NULL AND quantity IS NULL)",
-            name="ck_benchmark_materials_state_quantity_rules",
-        ),
-    )
+
  
