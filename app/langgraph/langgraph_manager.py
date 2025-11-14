@@ -1,8 +1,10 @@
 import asyncio
 import logging
+import json
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END
 from app.summary.intent_service import classify_email_intent
+from app.summary.extraction_service import BenchmarkExtractionService
 from app.models.emails import Email
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,8 @@ class EmailState(TypedDict):
     project_id: int
     mail_id: int | None
     saved_files: list
+    benchmark_analysis: dict | None
+    db: Session
 
 
 def intent_node(state: EmailState) -> EmailState:
@@ -46,6 +50,74 @@ def intent_node(state: EmailState) -> EmailState:
     }
 
 
+def benchmark_analysis_node(state: EmailState) -> EmailState:
+    """
+    Analyze vendor email against project benchmarks.
+    
+    Args:
+        state: Current email state
+        
+    Returns:
+        Updated state with benchmark analysis
+    """
+    logger.info(f"[BENCHMARK NODE] Analyzing email: {state['subject']}")
+    
+    try:
+        # Initialize extraction service
+        extraction_service = BenchmarkExtractionService(state['db'])
+        
+        # Prepare attachments info
+        attachments_info = [
+            {"filename": att, "content_type": "application/octet-stream"}
+            for att in state.get('attachments', [])
+        ]
+        
+        # Analyze email against benchmarks
+        analysis = extraction_service.analyze_vendor_email(
+            project_id=state['project_id'],
+            email_subject=state['subject'],
+            email_body=state['body'],
+            sender_email=state['sender'],
+            attachments_info=attachments_info
+        )
+        
+        logger.info(
+            f"[BENCHMARK NODE] Analysis complete. "
+            f"Overall score: {analysis.get('overall_score', 0)}, "
+            f"Coverage: {analysis.get('vendor_coverage', 0)}%"
+        )
+        
+        return {
+            **state,
+            "benchmark_analysis": analysis
+        }
+        
+    except Exception as e:
+        logger.error(f"[BENCHMARK NODE] Error analyzing email: {e}")
+        return {
+            **state,
+            "benchmark_analysis": {
+                "error": str(e),
+                "overall_score": 0
+            }
+        }
+
+
+def should_analyze_benchmarks(state: EmailState) -> Literal["analyze", "skip"]:
+    """
+    Determine if email should be analyzed against benchmarks.
+    
+    Args:
+        state: Current email state
+        
+    Returns:
+        "analyze" if email is a quotation, "skip" otherwise
+    """
+    if state.get('intent') == "Quotation":
+        return "analyze"
+    return "skip"
+
+
 class EmailWorkflow:
     """LangGraph workflow for processing emails."""
     
@@ -55,17 +127,28 @@ class EmailWorkflow:
         
         # Add nodes
         self.workflow.add_node("intent", intent_node)
+        self.workflow.add_node("benchmark_analysis", benchmark_analysis_node)
         
         # Set entry point
         self.workflow.set_entry_point("intent")
         
-        # Add edges
-        self.workflow.add_edge("intent", END)
+        # Add conditional edges
+        self.workflow.add_conditional_edges(
+            "intent",
+            should_analyze_benchmarks,
+            {
+                "analyze": "benchmark_analysis",
+                "skip": END
+            }
+        )
+        
+        # Add edge from benchmark analysis to end
+        self.workflow.add_edge("benchmark_analysis", END)
         
         # Compile the graph
         self.app = self.workflow.compile()
         
-        logger.info("Email workflow initialized")
+        logger.info("Email workflow initialized with benchmark analysis")
     
     async def process_email(
         self,
@@ -84,7 +167,7 @@ class EmailWorkflow:
             db: Database session
             
         Returns:
-            Processing result with intent and database info
+            Processing result with intent, benchmark analysis, and database info
         """
         # Initialize state
         initial_state: EmailState = {
@@ -97,13 +180,15 @@ class EmailWorkflow:
             "user_id": user_id,
             "project_id": project_id,
             "mail_id": None,
-            "saved_files": []
+            "saved_files": [],
+            "benchmark_analysis": None,
+            "db": db
         }
         
         # Run workflow
         result = await self.app.ainvoke(initial_state)
         
-        # If quotation, save to database
+        # If quotation, save to database with benchmark analysis
         if result['intent'] == "Quotation":
             try:
                 # Save attachments (handled by IMAP service)
@@ -111,13 +196,22 @@ class EmailWorkflow:
                 if result.get('saved_files'):
                     attachments_url = ",".join(result['saved_files'])
                 
+                # Prepare summary JSON
+                summary_json = None
+                overall_score = None
+                if result.get('benchmark_analysis'):
+                    summary_json = json.dumps(result['benchmark_analysis'])
+                    overall_score = result['benchmark_analysis'].get('overall_score')
+                
                 # Create email record
                 email_record = Email(
                     user_id=user_id,
                     project_id=project_id,
                     email=result['sender'],
                     message=result['body'],
-                    attachments_url=attachments_url
+                    attachments_url=attachments_url,
+                    summary_json=summary_json,
+                    overall_score=overall_score
                 )
                 db.add(email_record)
                 db.commit()
@@ -125,7 +219,10 @@ class EmailWorkflow:
                 
                 result['mail_id'] = email_record.mail_id
                 
-                logger.info(f"[WORKFLOW] Saved quotation to database (ID: {email_record.mail_id})")
+                logger.info(
+                    f"[WORKFLOW] Saved quotation to database (ID: {email_record.mail_id}, "
+                    f"Score: {overall_score})"
+                )
                 
             except Exception as e:
                 db.rollback()

@@ -8,8 +8,11 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-# Initialize OpenAI client
-client = OpenAI(api_key=settings.OPENAI_API_KEY)
+# Initialize OpenAI client with OpenRouter
+client = OpenAI(
+    api_key=settings.OPENAI_API_KEY,
+    base_url="https://openrouter.ai/api/v1"
+)
 
 def classify_email_intent(message: str) -> Literal["Quotation", "Casual"]:
     """
@@ -23,7 +26,7 @@ def classify_email_intent(message: str) -> Literal["Quotation", "Casual"]:
     """
     try:
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="openai/gpt-4o-mini",
             messages=[
                 {
                     "role": "system",
