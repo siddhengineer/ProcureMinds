@@ -5,6 +5,8 @@ from app.core.config import settings
 import logging
 from dotenv import load_dotenv
 
+from app.api.routers.workflow import router as workflow_router
+
 # Load environment variables
 load_dotenv()
 
@@ -25,6 +27,7 @@ app.include_router(imap_router.router, tags=["IMAP Email"])
 app.include_router(quotation_router.router, prefix="/quotations", tags=["Quotations"])
 app.include_router(rfq_router.router, prefix="/rfq", tags=["RFQ"])
 
+app.include_router(workflow_router, prefix="/api/workflows")
 @app.get("/")
 def root():
     return {"message": "Welcome to ProcureMinds API"}
