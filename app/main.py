@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routers import workflow
+from app.api.routers import workflow, validation, rules
 from app.core.database import Base, engine
 
 Base.metadata.create_all(bind=engine)
@@ -8,6 +8,8 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI(title="ProcureMinds", version="0.1.0")
 
 app.include_router(workflow.router, prefix="/api")
+app.include_router(validation.router, prefix="/api")
+app.include_router(rules.router, prefix="/api")
 
 
 @app.get("/")

@@ -8,6 +8,7 @@ from app.models.boq_category import BOQCategory
 from app.models.rule_set import RuleSet
 from app.models.rule_item import RuleItem
 from app.models.user import User
+from app.models.validation_attempts import ValidationAttempt
 
 __all__ = [
 	"Workflow",
@@ -20,4 +21,5 @@ __all__ = [
 	"BOQCategory",
 	"RuleSet",
 	"RuleItem",
+	"ValidationAttempt",
 ]
