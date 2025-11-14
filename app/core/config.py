@@ -2,9 +2,8 @@
 Updated config.py with Google OAuth fields
 Copy this to: ProcureMinds/app/core/config.py
 """
-
-from pydantic_settings import BaseSettings
 from typing import Optional
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -31,8 +30,13 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
 
     # Gemini API Configuration
-    gemini_api_key: str = ""
-    gemini_model: str = ""
+    gemini_api_key: str
+    gemini_model: str
+    openrouter_api_key: str | None = None
+    openrouter_model: str = "openai/gpt-4o"
+    # Optional Google fields present in .env; not used here but allowed
+    google_credentials_file: str | None = None
+    google_token_file: str | None = None
 
     @property
     def database_url(self) -> str:
@@ -42,9 +46,12 @@ class Settings(BaseSettings):
     def google_scopes_list(self) -> list:
         return self.google_scopes.split(",")
 
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
+    # Pydantic v2 config
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        case_sensitive=False,
+        extra="ignore",  # ignore unknown keys in .env
+    )
 
 
 settings = Settings()
