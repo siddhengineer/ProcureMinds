@@ -24,11 +24,7 @@ class Settings(BaseSettings):
     IMAP_PORT: int = 993
 
     OPENAI_API_KEY: Optional[str] = None
-    class Config:
-        env_file = ".env"
-        case_sensitive = False
-        # Remove extra='forbid' if it exists, or change to 'allow'
-        extra = "allow"  # or remove this line entirely
+
     db_host: str
     db_port: int
     db_name: str
@@ -59,7 +55,7 @@ class Settings(BaseSettings):
     
     @property
     def google_scopes_list(self) -> list:
-        return self.google_scopes.split(",")
+        return self.GOOGLE_SCOPES.split(",")
 
     # Pydantic v2 config
     model_config = SettingsConfigDict(
@@ -72,8 +68,8 @@ class Settings(BaseSettings):
 settings = Settings()
 
 # Export individual settings for backward compatibility
-GOOGLE_CLIENT_ID = settings.google_client_id
-GOOGLE_CLIENT_SECRET = settings.google_client_secret
-GOOGLE_REDIRECT_URI = settings.google_redirect_uri
+GOOGLE_CLIENT_ID = settings.GOOGLE_CLIENT_ID
+GOOGLE_CLIENT_SECRET = settings.GOOGLE_CLIENT_SECRET
+GOOGLE_REDIRECT_URI = settings.GOOGLE_REDIRECT_URI
 GOOGLE_SCOPES = settings.google_scopes_list
 FRONTEND_URL = settings.frontend_url
