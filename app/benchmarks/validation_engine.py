@@ -104,7 +104,8 @@ def run_validation(db: Session, *, user_id: int, project_id: Optional[int], raw_
         "{ rooms: [ { name, length:{value,unit}, width:{value,unit}, height:{value,unit}, "
         "  wall_thickness:{value,unit}, relations:[{source,relation,target}] } ], "
         "  global_wall_thickness:{value,unit}|null, floor_height:{value,unit}|null } ."
-        "Units examples: m, cm, mm, ft, in. Preserve user's original unit strings."
+        "Units examples: m, cm, mm, ft, in. Preserve user's original unit strings. "
+        "Validation requirements: For each room or structure, you MUST extract (1) the name (e.g. kitchen, room, slab), (2) the dimensions (length, width, height), and (3) the units for each dimension. If ANY of these are missing for any room, mark the input as INVALID and explain which field is missing."
     )
     user_prompt = f"Input:\n{raw_input_text}"
     messages = [
@@ -131,6 +132,20 @@ def run_validation(db: Session, *, user_id: int, project_id: Optional[int], raw_
     # Require at least one room
     if not data.get("rooms"):
         missing_fields.append("rooms")
+    else:
+        for idx, room in enumerate(data["rooms"]):
+            if not room.get("name"):
+                missing_fields.append(f"room[{idx}].name")
+            for dim in ["length", "width", "height"]:
+                if not room.get(dim):
+                    missing_fields.append(f"room[{idx}].{dim}")
+                else:
+                    val = room[dim].get("value")
+                    unit = room[dim].get("unit")
+                    if val is None:
+                        missing_fields.append(f"room[{idx}].{dim}.value")
+                    if not unit:
+                        missing_fields.append(f"room[{idx}].{dim}.unit")
 
     is_valid = len(missing_fields) == 0 and len(invalid_fields) == 0
     status = "valid" if is_valid else ("invalid" if (missing_fields or invalid_fields) else "needs_more_info")

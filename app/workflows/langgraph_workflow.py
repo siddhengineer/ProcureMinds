@@ -15,6 +15,8 @@ from app.models.master_rule_item import MasterRuleItem
 from app.models.boq_category import BOQCategory
 from app.models.rule_set import RuleSet
 from app.models.rule_item import RuleItem
+from app.models.boq import BOQ
+from app.models.boq_item import BOQItem
 from app.models.validation_attempts import ValidationAttempt
 from app.core.config import settings
 
@@ -84,11 +86,11 @@ class WorkflowGraph:
         workflow.add_node("validate", self.validation_node)
         workflow.add_node("select_rules", self.select_rules_from_master_node)
         workflow.add_node("compute_boq", self.compute_boq_node)
+        workflow.add_node("generate_csv", self.generate_csv_node)
 
         workflow.set_entry_point("input")
         workflow.add_edge("input", "validate")
 
-        # Conditionally proceed to rules generation only if validation is valid
         def _route_from_validate(state: ValidationFlowState) -> str:
             status = state.get("validation_result", {}).get("status")
             logger.info("Route[validate]: status=%s -> %s", status, ("go" if status == "valid" else "stop"))
@@ -103,9 +105,64 @@ class WorkflowGraph:
             },
         )
         workflow.add_edge("select_rules", "compute_boq")
-        workflow.add_edge("compute_boq", END)
+        workflow.add_edge("compute_boq", "generate_csv")
+        workflow.add_edge("generate_csv", END)
 
         return workflow.compile()
+    async def generate_csv_node(self, state: ValidationFlowState) -> ValidationFlowState:
+        import csv
+        from io import StringIO
+        logger.info("Node[generate_csv]: start")
+        boq_id = (state.get("compute_result") or {}).get("boq_id")
+        if not boq_id:
+            state["csv_result"] = {"skipped": True, "reason": "missing_boq_id"}
+            logger.warning("Node[generate_csv]: skipped | reason=missing_boq_id")
+            return state
+        # Fetch BOQ and items
+        boq = self.db.get(BOQ, boq_id)
+        if not boq:
+            state["csv_result"] = {"error": "boq_not_found"}
+            logger.error("Node[generate_csv]: boq_not_found")
+            return state
+        items = self.db.execute(select(BOQItem).where(BOQItem.boq_id == boq_id)).scalars().all()
+        categories = {c.boq_category_id: c.name for c in self.db.execute(select(BOQCategory)).scalars().all()}
+        rule_sets = {r.rule_set_id: r for r in self.db.execute(select(RuleSet)).scalars().all()}
+        rule_items = {ri.rule_item_id: ri for ri in self.db.execute(select(RuleItem)).scalars().all()}
+
+        # Prepare CSV
+        output = StringIO()
+        writer = csv.writer(output)
+        writer.writerow([
+            "Category",
+            "Rule Set",
+            "Material Name",
+            "Rule Item Key",
+            "Proportion/Formula",
+            "Unit",
+            "Quantity",
+        ])
+        for item in items:
+            category = categories.get(item.category_id, "Unknown")
+            rule_item = rule_items.get(item.rule_item_id)
+            rule_set = rule_sets.get(boq.rule_set_id)
+            writer.writerow([
+                category,
+                rule_set.name if rule_set else "",
+                item.material_name,
+                rule_item.key if rule_item else "",
+                rule_item.formula if rule_item and rule_item.formula else (str(rule_item.value) if rule_item and rule_item.value is not None else ""),
+                item.unit,
+                str(item.quantity),
+            ])
+        csv_data = output.getvalue()
+        output.close()
+        # Save to file (or attach to state)
+        csv_path = f"boq_{boq_id}.csv"
+        with open(csv_path, "w", encoding="utf-8") as f:
+            f.write(csv_data)
+        state["csv_result"] = {"csv_path": csv_path, "row_count": len(items)}
+        logger.info(f"Node[generate_csv]: done | csv_path={csv_path} row_count={len(items)}")
+        return state
 
     async def execute_validate(self, *, user_id: int, project_id: Optional[int], raw_input_text: str) -> dict[str, Any]:
         """Execute validation flow and return validation result payload."""
