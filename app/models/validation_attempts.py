@@ -34,6 +34,7 @@ class ValidationAttempt(Base):
     missing_fields = Column(JSON, nullable=True)
     invalid_fields = Column(JSON, nullable=True)
     unit_warnings = Column(JSON, nullable=True)
+    derived_metrics = Column(JSON, nullable=True)  # computed geometry like floor_area_m2, volumes
 
     created_at = Column(TIMESTAMP, server_default=func.now(), nullable=False)
     updated_at = Column(
