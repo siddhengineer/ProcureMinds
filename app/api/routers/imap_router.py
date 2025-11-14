@@ -1,16 +1,22 @@
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Depends
 from app.summary.imap_service import IMAPEmailService
+from app.langgraph.langgraph_manager import process_email_queue
+from app.core.database import get_db
+from sqlalchemy.orm import Session
 import os
 import asyncio
 import logging
-from typing import Optional
+from typing import Optional, Set
+from datetime import datetime
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
-# Global polling task
+# Global polling task and state
 polling_task: Optional[asyncio.Task] = None
 is_polling = False
+processed_email_ids: Set[str] = set()  # Track processed email IDs
+polling_start_time: Optional[datetime] = None
 
 def get_imap_credentials():
     """Get IMAP credentials from environment variables."""
@@ -21,9 +27,9 @@ def get_imap_credentials():
         "port": int(os.getenv("IMAP_PORT", 993))
     }
 
-async def poll_emails():
+async def poll_emails(user_id: int, project_id: int, db: Session):
     """Background task that polls for new emails every 30 seconds."""
-    global is_polling
+    global is_polling, processed_email_ids, polling_start_time
     
     credentials = get_imap_credentials()
     service = IMAPEmailService(**credentials)
@@ -35,67 +41,81 @@ async def poll_emails():
         is_polling = False
         return
     
-    start_msg = "Email polling started - checking every 30 seconds (limit: 10 most recent emails)"
+    # Mark the start time
+    polling_start_time = datetime.now()
+    
+    # Get initial unread emails to mark as "already processed"
+    initial_emails = service.get_unread_emails(limit=10)
+    for email_data in initial_emails:
+        processed_email_ids.add(email_data['id'])
+    
+    start_msg = f"Email polling started - will only process NEW emails from {polling_start_time.strftime('%Y-%m-%d %H:%M:%S')}"
     logger.info(start_msg)
     print(f"\n{'='*80}")
     print(f"INFO: {start_msg}")
+    print(f"INFO: Marked {len(processed_email_ids)} existing emails as already processed")
     print(f"{'='*80}\n")
     
     try:
         while is_polling:
             try:
-                print(f"\n[POLLING] Checking for new emails at {asyncio.get_event_loop().time():.0f}s...")
+                print(f"\n[POLLING] Checking for new emails...")
                 
-                # Get only the 10 most recent unread emails
-                emails = service.get_unread_emails(limit=10)
+                # Get recent unread emails
+                emails = service.get_unread_emails(limit=20)
                 
-                if emails:
-                    msg = f"Processing {len(emails)} most recent unread email(s)"
+                # Filter to only NEW emails (not processed before)
+                new_emails = [e for e in emails if e['id'] not in processed_email_ids]
+                
+                if new_emails:
+                    msg = f"Found {len(new_emails)} NEW email(s)"
                     logger.info(msg)
                     print(f"INFO: {msg}\n")
                     
-                    for idx, email_data in enumerate(emails, 1):
-                        # Print and log full email details
+                    # Mark all as processed
+                    for email_data in new_emails:
+                        processed_email_ids.add(email_data['id'])
+                    
+                    # Save attachments first
+                    for email_data in new_emails:
+                        if email_data['attachments']:
+                            saved_files = service.save_attachments(email_data)
+                            email_data['saved_files'] = saved_files
+                        else:
+                            email_data['saved_files'] = []
+                    
+                    # Process through LangGraph workflow queue
+                    print(f"[WORKFLOW] Processing {len(new_emails)} emails through LangGraph workflow...")
+                    results = await process_email_queue(
+                        emails=new_emails,
+                        user_id=user_id,
+                        project_id=project_id,
+                        db=db
+                    )
+                    
+                    # Print results
+                    for idx, result in enumerate(results, 1):
                         separator = "=" * 80
                         print(f"\n{separator}")
-                        print(f"NEW EMAIL #{idx}")
-                        print(f"Subject: {email_data['subject']}")
-                        print(f"From: {email_data['from']}")
-                        print(f"Date: {email_data['date']}")
-                        print(f"Body:\n{email_data['body']}")
+                        print(f"EMAIL #{idx} PROCESSED")
+                        print(f"Subject: {result.get('subject', 'N/A')}")
+                        print(f"From: {result.get('sender', 'N/A')}")
+                        print(f"Intent: {result.get('intent', 'N/A')}")
                         
-                        logger.info(separator)
-                        logger.info(f"NEW EMAIL #{idx}")
-                        logger.info(f"Subject: {email_data['subject']}")
-                        logger.info(f"From: {email_data['from']}")
-                        logger.info(f"Date: {email_data['date']}")
-                        logger.info(f"Body:\n{email_data['body']}")
-                        
-                        # Log and save attachments
-                        if email_data['attachments']:
-                            att_msg = f"Attachments ({len(email_data['attachments'])}):"
-                            print(att_msg)
-                            logger.info(att_msg)
-                            
-                            saved_files = service.save_attachments(email_data)
-                            for i, attachment in enumerate(email_data['attachments']):
-                                att_detail = f"  {i+1}. {attachment['filename']} ({attachment['content_type']}, {attachment['size']} bytes)"
-                                print(att_detail)
-                                logger.info(att_detail)
-                                if i < len(saved_files):
-                                    saved_msg = f"     Saved to: {saved_files[i]}"
-                                    print(saved_msg)
-                                    logger.info(saved_msg)
+                        if result.get('mail_id'):
+                            print(f"Database ID: {result['mail_id']}")
+                            print(f"Status: Saved as Quotation")
+                        elif result.get('error'):
+                            print(f"Error: {result['error']}")
                         else:
-                            no_att_msg = "No attachments"
-                            print(no_att_msg)
-                            logger.info(no_att_msg)
+                            print(f"Status: Classified as Casual (not saved)")
                         
                         print(separator)
-                        logger.info(separator)
+                        
+                        logger.info(f"Processed email {idx}: Intent={result.get('intent')}, mail_id={result.get('mail_id')}")
                 else:
-                    print("[POLLING] No new unread emails")
-                    logger.debug("No new unread emails")
+                    print("[POLLING] No new emails since last check")
+                    logger.debug("No new emails")
                 
             except Exception as e:
                 error_msg = f"Error during polling: {e}"
@@ -129,20 +149,32 @@ async def poll_emails():
         print(f"INFO: {stop_msg}")
 
 @router.post("/emails/start-polling")
-async def start_polling():
-    """Start polling for new emails every 30 seconds."""
-    global polling_task, is_polling
+async def start_polling(user_id: int, project_id: int, db: Session = Depends(get_db)):
+    """
+    Start polling for new emails every 30 seconds.
+    Only processes emails received AFTER polling starts.
+    
+    Args:
+        user_id: User ID for database records
+        project_id: Project ID for database records
+    """
+    global polling_task, is_polling, processed_email_ids
     
     if is_polling:
         return {"status": "already_running", "message": "Email polling is already active"}
     
+    # Reset processed emails tracking
+    processed_email_ids.clear()
+    
     is_polling = True
-    polling_task = asyncio.create_task(poll_emails())
+    polling_task = asyncio.create_task(poll_emails(user_id, project_id, db))
     
     return {
         "status": "started",
-        "message": "Email polling started - checking every 30 seconds",
-        "interval": "30 seconds"
+        "message": "Email polling started - will only process NEW emails from now on",
+        "interval": "30 seconds",
+        "user_id": user_id,
+        "project_id": project_id
     }
 
 @router.post("/emails/stop-polling")

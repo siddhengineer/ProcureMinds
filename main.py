@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.api.routers import imap_router
+from app.api.routers import imap_router, quotation_router
 from app.core.config import settings
 import logging
 
@@ -18,6 +18,7 @@ app = FastAPI(
 
 # Include routers
 app.include_router(imap_router.router, tags=["IMAP Email"])
+app.include_router(quotation_router.router, prefix="/quotations", tags=["Quotations"])
 
 @app.get("/")
 def root():

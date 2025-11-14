@@ -7,7 +7,7 @@ load_dotenv()
 
 class Settings(BaseSettings):
     # Database
-    DATABASE_URL: str = ""
+    DATABASE_URL: str 
 
     # Google OAuth
     GOOGLE_CLIENT_ID: Optional[str] = None
@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     IMAP_PASSWORD: Optional[str] = None
     IMAP_PORT: int = 993
 
+    OPENAI_API_KEY: Optional[str] = None
     class Config:
         env_file = ".env"
         case_sensitive = False
