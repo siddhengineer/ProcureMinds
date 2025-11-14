@@ -4,7 +4,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.services.ruleset_engine import generate_ruleset
+from app.benchmarks.ruleset_engine import generate_ruleset
 
 
 router = APIRouter(prefix="/rules", tags=["rules"])
