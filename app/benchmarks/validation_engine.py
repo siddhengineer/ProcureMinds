@@ -117,7 +117,7 @@ def run_validation(db: Session, *, user_id: int, project_id: Optional[int], raw_
     elif settings.gemini_api_key:
         content = _gemini_chat(messages, model=settings.gemini_model, temperature=0)
     else:
-        raise RuntimeError("No LLM provider configured: set OPENROUTER_API_KEY or GEMINI_API_KEY in .env")
+        raise RuntimeError("No LLM provider configured: set openrouter_api_key or GEMINI_API_KEY in .env")
 
     try:
         data: Dict[str, Any] = _extract_json_block(content)
