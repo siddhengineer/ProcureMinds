@@ -156,11 +156,29 @@ class WorkflowGraph:
             ])
         csv_data = output.getvalue()
         output.close()
-        # Save to file (or attach to state)
+        # Save to file
         csv_path = f"boq_{boq_id}.csv"
         with open(csv_path, "w", encoding="utf-8") as f:
             f.write(csv_data)
-        state["csv_result"] = {"csv_path": csv_path, "row_count": len(items)}
+
+        # Store CSV metadata in DB
+        from app.models.boq_csv import BOQCSV
+        user_id = boq.user_id if boq else None
+        csv_record = BOQCSV(
+            boq_id=boq_id,
+            file_path=csv_path,
+            generated_by=user_id,
+        )
+        self.db.add(csv_record)
+        self.db.commit()
+
+        # Provide CSV link in result (assuming static file serving from root)
+        csv_link = f"/static/{csv_path}"  # Adjust path as per your static file config
+        state["csv_result"] = {
+            "csv_path": csv_path,
+            "csv_link": csv_link,
+            "row_count": len(items)
+        }
         logger.info(f"Node[generate_csv]: done | csv_path={csv_path} row_count={len(items)}")
         return state
 

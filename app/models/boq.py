@@ -2,6 +2,7 @@ from sqlalchemy import Column, Integer, String, ForeignKey, TIMESTAMP, func
 from sqlalchemy.orm import relationship
 
 from app.core.database import Base
+from app.models.boq_csv import BOQCSV  # Add this import at the top
 
 
 class BOQ(Base):
@@ -18,3 +19,4 @@ class BOQ(Base):
     rule_set = relationship("RuleSet")
     user = relationship("User")
     items = relationship("BOQItem", back_populates="boq", cascade="all, delete-orphan")
+    csv_files = relationship("BOQCSV", back_populates="boq", cascade="all, delete-orphan")

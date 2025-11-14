@@ -138,6 +138,11 @@ async def validate_and_generate(payload: ValidateAndGenerateRequest, db: Session
         validation = ValidationResponse(**validation_dict)
         rules_dict = res.get("rules_result") or {}
         rules = RulesResult(**rules_dict)
-        return ValidateAndGenerateResponse(validation=validation, rules=rules)
+        # Attach CSV link if available
+        csv_result = res.get("csv_result") or {}
+        response = ValidateAndGenerateResponse(validation=validation, rules=rules)
+        if csv_result.get("csv_link"):
+            response.csv_link = csv_result["csv_link"]
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
