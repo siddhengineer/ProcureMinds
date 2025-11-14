@@ -1,0 +1,24 @@
+# Email Processing Dependencies
+
+# Core dependencies (if not already installed)
+fastapi>=0.104.0
+uvicorn>=0.24.0
+pydantic>=2.5.0
+sqlalchemy>=2.0.0
+python-dotenv>=1.0.0
+
+# OpenAI for intent classification and extraction
+openai>=1.3.0
+
+# LangGraph for workflow orchestration
+langgraph>=0.0.20
+
+# Excel file processing
+pandas>=2.1.0
+openpyxl>=3.1.0
+
+# PDF file processing
+PyPDF2>=3.0.0
+
+# HTTP client for testing
+httpx>=0.25.0
