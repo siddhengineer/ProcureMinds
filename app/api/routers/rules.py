@@ -14,8 +14,6 @@ class RulesetGenerateRequest(BaseModel):
     user_id: int
     project_id: int
     validation_attempt_id: int
-    rule_set_name: str | None = "default"
-    preview: bool = False
 
 
 class RuleItemPreview(BaseModel):
@@ -41,8 +39,6 @@ def rules_generate(payload: RulesetGenerateRequest, db: Session = Depends(get_db
             user_id=payload.user_id,
             project_id=payload.project_id,
             validation_attempt_id=payload.validation_attempt_id,
-            rule_set_name=payload.rule_set_name or "default",
-            preview=payload.preview,
         )
         return RulesetGenerateResponse(
             rule_set_id=rs_id,

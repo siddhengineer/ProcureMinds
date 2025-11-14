@@ -29,5 +29,5 @@ class MasterRuleSet(Base):
     )
 
     __table_args__ = (
-        UniqueConstraint("name", "category_id", "version", name="uq_master_rule_set_name_cat_ver"),
+        UniqueConstraint("name", "category_id", "version"),
     )

@@ -56,8 +56,6 @@ def generate_ruleset(
     user_id: int,
     project_id: int,
     validation_attempt_id: int,
-    rule_set_name: str = "default",
-    preview: bool = False,
 ) -> Tuple[int, int, Optional[List[Dict[str, Any]]]]:
     attempt = db.query(ValidationAttempt).filter(
         ValidationAttempt.validation_attempt_id == validation_attempt_id,
@@ -74,13 +72,13 @@ def generate_ruleset(
     elif settings.gemini_api_key:
         content = _gemini_chat(messages, model=settings.gemini_model, temperature=0)
     else:
-        raise RuntimeError("No LLM provider configured: set OPENROUTER_API_KEY or GEMINI_API_KEY in .env")
+        raise RuntimeError("No LLM provider configured: set openrouter_api_key or GEMINI_API_KEY in .env")
 
     data = _extract_json_block(content)
     rules: List[Dict[str, Any]] = data.get("rules", [])
 
     # Persist RuleSet
-    rs = RuleSet(rule_set_id=None, user_id=user_id, project_id=project_id, name=(data.get("rule_set", {}) or {}).get("name", rule_set_name))
+    rs = RuleSet(rule_set_id=None, user_id=user_id, project_id=project_id, name=(data.get("rule_set", {}) or {}).get("name"))
     db.add(rs)
     db.commit()
     db.refresh(rs)
@@ -108,15 +106,6 @@ def generate_ruleset(
         if key is None or (value is None and formula is None):
             continue
 
-        # collect preview item
-        items_preview.append({
-            "category": category_name or None,
-            "key": str(key),
-            "value": float(value) if isinstance(value, (int, float)) else value,
-            "formula": str(formula) if formula is not None else None,
-            "unit": str(unit) if unit is not None else None,
-            "description": str(description) if description is not None else None,
-        })
 
         item = RuleItem(
             rule_set_id=rs.rule_set_id,
@@ -131,4 +120,4 @@ def generate_ruleset(
         created += 1
 
     db.commit()
-    return rs.rule_set_id, created, (items_preview if preview else None)
+    return rs.rule_set_id, created,
