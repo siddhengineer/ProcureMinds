@@ -1,7 +1,7 @@
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 from googleapiclient.discovery import build
-from app.db import get_db
+from app.core.database import get_db
 from app.config import GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, GOOGLE_SCOPES
 
 def get_gmail_service(project_id: str):
