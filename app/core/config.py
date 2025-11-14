@@ -1,22 +1,31 @@
 from pydantic_settings import BaseSettings
+from dotenv import load_dotenv
+from typing import Optional
+
+load_dotenv()
 
 
 class Settings(BaseSettings):
-    db_host: str
-    db_port: int
-    db_name: str
-    db_user: str
-    db_password: str
-    gemini_api_key: str
-    gemini_model: str
+    # Database
+    DATABASE_URL: str = ""
 
-    @property
-    def database_url(self) -> str:
-        return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
+    # Google OAuth
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+    GOOGLE_REDIRECT_URI: Optional[str] = None
+    GOOGLE_SCOPES: Optional[str] = None
+
+    # IMAP Email
+    IMAP_SERVER: Optional[str] = None
+    IMAP_EMAIL: Optional[str] = None
+    IMAP_PASSWORD: Optional[str] = None
+    IMAP_PORT: int = 993
 
     class Config:
         env_file = ".env"
         case_sensitive = False
+        # Remove extra='forbid' if it exists, or change to 'allow'
+        extra = "allow"  # or remove this line entirely
 
 
 settings = Settings()
