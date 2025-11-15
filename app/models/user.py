@@ -18,3 +18,4 @@ class User(Base):
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
+    vendors = relationship("Vendor", back_populates="user", cascade="all, delete-orphan")

@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers import imap_router, quotation_router, rfq_router
 from app.api.routers import summary_router  # Add this import
+from app.api.routers import vendor_router
 from app.core.config import settings
 import logging
 from dotenv import load_dotenv
@@ -29,6 +30,7 @@ app.include_router(quotation_router.router, prefix="/quotations", tags=["Quotati
 app.include_router(rfq_router.router, prefix="/rfq", tags=["RFQ"])
 app.include_router(workflow_router, prefix="/api/workflows")
 app.include_router(summary_router.router, prefix="/summary", tags=["Summary"])  # Add this line
+app.include_router(vendor_router.router, prefix="/api")
 
 @app.get("/")
 def root():
