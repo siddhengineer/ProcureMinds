@@ -18,6 +18,7 @@ from app.models.rule_item import RuleItem
 from app.models.boq import BOQ
 from app.models.boq_item import BOQItem
 from app.models.validation_attempts import ValidationAttempt
+from app.models.benchmarks import BenchmarkMaterial
 from app.core.config import settings
 
 
@@ -65,18 +66,26 @@ class WorkflowGraph:
         """Validate input via LLM and persist ValidationAttempt."""
         logger.info("Node[validate]: start | using_openrouter=%s using_gemini=%s",
                     bool(settings.openrouter_api_key), bool(settings.gemini_api_key))
-        result = run_validation(
-            self.db,
-            user_id=state["user_id"],
-            project_id=state.get("project_id"),
-            raw_input_text=state["raw_input_text"],
-        )
-        state["validation_result"] = result
-        logger.info(
-            "Node[validate]: done | status=%s attempt_id=%s",
-            result.get("status"), result.get("validation_attempt_id")
-        )
-        return state
+        try:
+            result = run_validation(
+                self.db,
+                user_id=state["user_id"],
+                project_id=state.get("project_id"),
+                raw_input_text=state["raw_input_text"],
+            )
+            state["validation_result"] = result
+            # Console log LLM output for validation
+            print("[LLM VALIDATE OUTPUT]", result)
+            logger.info(
+                "Node[validate]: done | status=%s attempt_id=%s",
+                result.get("status"), result.get("validation_attempt_id")
+            )
+            return state
+        except Exception as e:
+            # Do not raise — record an error status and let the workflow route to END
+            logger.exception("Node[validate]: unexpected error during validation")
+            state["validation_result"] = {"status": "error", "error": str(e)}
+            return state
 
     def _build_graph(self) -> StateGraph:
         """Build the validation + ruleset generation workflow."""
@@ -86,7 +95,6 @@ class WorkflowGraph:
         workflow.add_node("validate", self.validation_node)
         workflow.add_node("select_rules", self.select_rules_from_master_node)
         workflow.add_node("compute_boq", self.compute_boq_node)
-        workflow.add_node("generate_csv", self.generate_csv_node)
 
         workflow.set_entry_point("input")
         workflow.add_edge("input", "validate")
@@ -105,82 +113,10 @@ class WorkflowGraph:
             },
         )
         workflow.add_edge("select_rules", "compute_boq")
-        workflow.add_edge("compute_boq", "generate_csv")
-        workflow.add_edge("generate_csv", END)
+        workflow.add_edge("compute_boq", END)
 
         return workflow.compile()
-    async def generate_csv_node(self, state: ValidationFlowState) -> ValidationFlowState:
-        import csv
-        from io import StringIO
-        logger.info("Node[generate_csv]: start")
-        boq_id = (state.get("compute_result") or {}).get("boq_id")
-        if not boq_id:
-            state["csv_result"] = {"skipped": True, "reason": "missing_boq_id"}
-            logger.warning("Node[generate_csv]: skipped | reason=missing_boq_id")
-            return state
-        # Fetch BOQ and items
-        boq = self.db.get(BOQ, boq_id)
-        if not boq:
-            state["csv_result"] = {"error": "boq_not_found"}
-            logger.error("Node[generate_csv]: boq_not_found")
-            return state
-        items = self.db.execute(select(BOQItem).where(BOQItem.boq_id == boq_id)).scalars().all()
-        categories = {c.boq_category_id: c.name for c in self.db.execute(select(BOQCategory)).scalars().all()}
-        rule_sets = {r.rule_set_id: r for r in self.db.execute(select(RuleSet)).scalars().all()}
-        rule_items = {ri.rule_item_id: ri for ri in self.db.execute(select(RuleItem)).scalars().all()}
-
-        # Prepare CSV
-        output = StringIO()
-        writer = csv.writer(output)
-        writer.writerow([
-            "Category",
-            "Rule Set",
-            "Material Name",
-            "Rule Item Key",
-            "Proportion/Formula",
-            "Unit",
-            "Quantity",
-        ])
-        for item in items:
-            category = categories.get(item.category_id, "Unknown")
-            rule_item = rule_items.get(item.rule_item_id)
-            rule_set = rule_sets.get(boq.rule_set_id)
-            writer.writerow([
-                category,
-                rule_set.name if rule_set else "",
-                item.material_name,
-                rule_item.key if rule_item else "",
-                rule_item.formula if rule_item and rule_item.formula else (str(rule_item.value) if rule_item and rule_item.value is not None else ""),
-                item.unit,
-                str(item.quantity),
-            ])
-        csv_data = output.getvalue()
-        output.close()
-        # Save to file
-        csv_path = f"boq_{boq_id}.csv"
-        with open(csv_path, "w", encoding="utf-8") as f:
-            f.write(csv_data)
-
-        # Store CSV metadata in DB
-        from app.models.boq_csv import BOQCSV
-        user_id = boq.user_id if boq else None
-        csv_record = BOQCSV(
-            boq_id=boq_id,
-            file_path=csv_path,
-            generated_by=user_id,
-        )
-        self.db.add(csv_record)
-        self.db.commit()
-
-        # Provide CSV link in result (assuming static file serving from root)
-        csv_link = f"/static/{csv_path}"  # Adjust path as per your static file config
-        state["csv_result"] = {
-            "csv_path": csv_path,
-            "csv_link": csv_link,
-            "row_count": len(items)
-        }
-        logger.info(f"Node[generate_csv]: done | csv_path={csv_path} row_count={len(items)}")
-        return state
+    
 
     async def execute_validate(self, *, user_id: int, project_id: Optional[int], raw_input_text: str) -> dict[str, Any]:
         """Execute validation flow and return validation result payload."""
@@ -216,14 +152,15 @@ class WorkflowGraph:
         }
         result = await self.graph.ainvoke(initial_state)
         logger.info(
-            "Execute[full]: done | v_status=%s rs_id=%s boq=%s",
+            "Execute[full]: done | v_status=%s rule_set_ids=%s boqs=%s",
             (result.get("validation_result") or {}).get("status"),
-            (result.get("rules_result") or {}).get("rule_set_id"),
-            (result.get("compute_result") or {}).get("boq_id"),
+            (result.get("rules_result") or {}).get("rule_set_ids"),
+            (result.get("compute_result") or {}).get("boqs"),
         )
         return {
-            "validation_result": result["validation_result"],
-            "rules_result": result["rules_result"],
+            "validation_result": result.get("validation_result", {}),
+            "rules_result": result.get("rules_result", {}),
+            "compute_result": result.get("compute_result", {}),
         }
 
     async def execute(self, input_data: dict[str, Any]) -> dict[str, Any]:
@@ -243,10 +180,10 @@ class WorkflowGraph:
         logger.info("Execute[generic]: start | user_id=%s project_id=%s", user_id, project_id)
         result = await self.graph.ainvoke(initial_state)
         logger.info(
-            "Execute[generic]: done | v_status=%s rs_id=%s boq=%s",
+            "Execute[generic]: done | v_status=%s rule_set_ids=%s boqs=%s",
             (result.get("validation_result") or {}).get("status"),
-            (result.get("rules_result") or {}).get("rule_set_id"),
-            (result.get("compute_result") or {}).get("boq_id"),
+            (result.get("rules_result") or {}).get("rule_set_ids"),
+            (result.get("compute_result") or {}).get("boqs"),
         )
         return {
             "validation_result": result.get("validation_result", {}),
@@ -302,10 +239,88 @@ class WorkflowGraph:
                 va = self.db.query(ValidationAttempt).filter(ValidationAttempt.validation_attempt_id == va_id).first()
                 attempt_payload = va.extracted_payload if va and va.extracted_payload else None
 
+            # By default we do not skip the LLM selector. Initialize flag and wanted_names early so
+            # later logic can set them without accidental overwrites.
+            skip_llm = False
+            wanted_names = set()
+
+            # If the user explicitly provided a category/type in the extracted payload, prefer that
+            # (generate BOQ only for that BOQ category). If no category is provided, select all master
+            # rule sets by default (per current flow requirements).
+            if attempt_payload and isinstance(attempt_payload, dict):
+                user_cat = None
+                if isinstance(attempt_payload.get("category"), str):
+                    user_cat = attempt_payload.get("category").strip().lower()
+                elif isinstance(attempt_payload.get("type"), str):
+                    user_cat = attempt_payload.get("type").strip().lower()
+
+                if user_cat:
+                    # Try to match provided category against BOQCategory names (exact-ish match)
+                    matched_cat_id = None
+                    for cid, cname in cat_by_id.items():
+                        n = (cname or "").strip().lower()
+                        if n == user_cat or n.replace(" ", "_") == user_cat or n.replace("_", " ") == user_cat:
+                            matched_cat_id = cid
+                            break
+
+                    if matched_cat_id is not None:
+                        matched = [m for m in masters if m.category_id == matched_cat_id]
+                        if matched:
+                            wanted_names = {m.name for m in matched}
+                            skip_llm = True
+                            logger.info("Node[select_rules]: user requested BOQ category '%s' -> selecting %s masters", user_cat, len(wanted_names))
+                    else:
+                        # Unknown category value provided — fall back to selecting all master rule sets
+                        wanted_names = {m.name for m in masters}
+                        skip_llm = True
+                        logger.info("Node[select_rules]: user provided category '%s' not matched -> selecting ALL master rule sets (%s)", user_cat, len(wanted_names))
+                else:
+                    # No explicit category provided: select all master rule sets by default
+                    wanted_names = {m.name for m in masters}
+                    skip_llm = True
+                    logger.info("Node[select_rules]: no category provided -> selecting all master rule sets (%s)", len(wanted_names))
+
+            # If the user provided only basic room geometry (rooms with dimensions) and nothing else,
+            # we should generate BOQs for all master rule sets (all categories) using master defaults.
+            # Validate that rooms have required fields (length, width and their units). If fields missing,
+            # return a missing_fields error so API can request more info.
+            if attempt_payload and isinstance(attempt_payload, dict):
+                keys = set(attempt_payload.keys())
+                if keys <= {"rooms"}:
+                    rooms = attempt_payload.get("rooms") or []
+                    if not rooms:
+                        state["rules_result"] = {"error": "insufficient_details", "message": "provide more details of the building"}
+                        logger.warning("Node[select_rules]: insufficient_details from payload")
+                        return state
+                    missing = []
+                    for i, r in enumerate(rooms):
+                        L = r.get("length")
+                        W = r.get("width")
+                        if not L or not isinstance(L, dict) or L.get("value") is None or L.get("unit") is None:
+                            missing.append({"room_index": i, "field": "length"})
+                        if not W or not isinstance(W, dict) or W.get("value") is None or W.get("unit") is None:
+                            missing.append({"room_index": i, "field": "width"})
+                    if missing:
+                        state["rules_result"] = {"error": "missing_fields", "missing": missing}
+                        logger.warning("Node[select_rules]: missing_fields=%s", missing)
+                        return state
+                    # All rooms valid: select all master rule sets
+                    wanted_names = {m.name for m in masters}
+                    skip_llm = True
+                    logger.info("Node[select_rules]: rooms-only payload -> selecting all master rule sets (%s)", len(wanted_names))
+
+            # If there's no extracted payload and the raw text is very short, ask for more details
+            if not attempt_payload and (len((state.get("raw_input_text") or "").strip().split()) < 3):
+                state["rules_result"] = {"error": "insufficient_details", "message": "provide more details of the building"}
+                logger.warning("Node[select_rules]: insufficient raw input text")
+                return state
+
             # Build LLM prompt to select from catalog
-            wanted_names: set[str] = set()
+            # wanted_names already initialized above; ensure we have a set
+            if not isinstance(wanted_names, set):
+                wanted_names = set()
             llm_error: Optional[str] = None
-            if settings.openrouter_api_key or settings.gemini_api_key:
+            if not skip_llm and (settings.openrouter_api_key or settings.gemini_api_key):
                 sys_prompt = (
                     "You are a civil estimation assistant. From the provided catalog of master rule set names, "
                     "choose which apply to the user's described scope. Return ONLY JSON: {\"selected\": [names], \"notes\": string }. "
@@ -325,6 +340,8 @@ class WorkflowGraph:
                         content = _openrouter_chat(messages, model=settings.openrouter_model, temperature=0)
                     else:
                         content = _gemini_chat(messages, model=settings.gemini_model, temperature=0)
+                    # Console log LLM output for select_rules
+                    print("[LLM SELECT_RULES OUTPUT]", content)
                     data = self._extract_json_block(content)
                     sel = data.get("selected") or []
                     if isinstance(sel, list):
@@ -339,35 +356,44 @@ class WorkflowGraph:
                 wanted_names = {"CC-RCC-SLAB-M20", "FLR-TILE-600x600-VIT"}
                 logger.info("Node[select_rules]: using fallback selection %s", list(wanted_names))
 
-            # Validate against catalog
-            chosen = [m for m in masters if m.name in wanted_names]
+            # Validate against catalog. Use case-insensitive and substring matching to be resilient
+            # to minor differences in names returned by the LLM.
+            wanted_lower = {w.lower() for w in wanted_names}
+            chosen = [
+                m for m in masters
+                if m.name.lower() in wanted_lower
+                or any(w in m.name.lower() for w in wanted_lower)
+                or any(m.name.lower() in w for w in wanted_lower)
+            ]
             if not chosen:
                 state["rules_result"] = {"error": "no_master_rules_available"}
                 logger.error("Node[select_rules]: no_master_rules_available (post-validation)")
                 return state
 
-            # Create RuleSet
-            rs = RuleSet(user_id=state["user_id"], project_id=state["project_id"], name=(state.get("default")))
-            self.db.add(rs)
-            self.db.flush()
-            logger.info("Node[select_rules]: created rule_set_id=%s names=%s", rs.rule_set_id, [m.name for m in chosen])
-
+            rule_set_ids = []
             items_created = 0
             items_preview: list[dict[str, Any]] = []
             for ms in chosen:
+                # Create a RuleSet for each selected master rule set
+                rs = RuleSet(user_id=state["user_id"], project_id=state["project_id"], name=ms.name)
+                self.db.add(rs)
+                self.db.flush()
+                rule_set_ids.append(rs.rule_set_id)
+                logger.info("Node[select_rules]: created rule_set_id=%s name=%s", rs.rule_set_id, ms.name)
                 m_items = self.db.execute(select(MasterRuleItem).where(MasterRuleItem.master_rule_set_id == ms.master_rule_set_id)).scalars().all()
                 for mi in m_items:
+                    # Ensure we preserve master defaults (value, unit, formula) when cloning
                     unit_only, basis = self._parse_unit_basis(mi.unit)
                     ri = RuleItem(
                         rule_set_id=rs.rule_set_id,
                         category_id=ms.category_id,
                         key=mi.key,
-                        unit=mi.unit,
+                        unit=mi.unit or "",
                         rate_basis=basis,
                         description=mi.description,
-                        value=None,
-                        resolved_rate=None,
-                        formula=None,
+                        value=mi.default_value if getattr(mi, "default_value", None) is not None else None,
+                        resolved_rate=mi.default_value if getattr(mi, "default_value", None) is not None else None,
+                        formula=mi.formula if getattr(mi, "formula", None) is not None else None,
                     )
                     self.db.add(ri)
                     items_created += 1
@@ -381,8 +407,9 @@ class WorkflowGraph:
 
             self.db.commit()
             logger.info("Node[select_rules]: done | items_created=%s", items_created)
+            # For downstream nodes, you may need to process each rule_set_id separately
             state["rules_result"] = {
-                "rule_set_id": rs.rule_set_id,
+                "rule_set_ids": rule_set_ids,
                 "items_created": items_created,
                 "items": items_preview if state.get("preview") else None,
                 "llm_notes": None if not llm_error else f"selector_error: {llm_error}",
@@ -397,9 +424,9 @@ class WorkflowGraph:
     async def compute_boq_node(self, state: ValidationFlowState) -> ValidationFlowState:
         try:
             logger.info("Node[compute_boq]: start")
-            rs_id = (state.get("rules_result") or {}).get("rule_set_id")
+            rs_ids = (state.get("rules_result") or {}).get("rule_set_ids") or []
             va_id = (state.get("validation_result") or {}).get("validation_attempt_id")
-            if not rs_id or not va_id:
+            if not rs_ids or not va_id:
                 state["compute_result"] = {"skipped": True, "reason": "missing_rule_set_or_validation"}
                 logger.warning("Node[compute_boq]: skipped | reason=missing_rule_set_or_validation")
                 return state
@@ -407,15 +434,121 @@ class WorkflowGraph:
                 state["compute_result"] = {"skipped": True, "reason": "missing_project_id"}
                 logger.warning("Node[compute_boq]: skipped | reason=missing_project_id")
                 return state
-            boq_id, count = compute_boq(
-                self.db,
-                user_id=state["user_id"],
-                project_id=state["project_id"],
-                validation_attempt_id=va_id,
-                rule_set_id=rs_id,
-            )
-            state["compute_result"] = {"boq_id": boq_id, "items_created": count}
-            logger.info("Node[compute_boq]: done | boq_id=%s items_created=%s", boq_id, count)
+
+            boqs = []
+            total_items = 0
+            for rs_id in rs_ids:
+                try:
+                    boq_id, count = compute_boq(
+                        self.db,
+                        user_id=state["user_id"],
+                        project_id=state["project_id"],
+                        validation_attempt_id=va_id,
+                        rule_set_id=rs_id,
+                    )
+                    # Gather BOQ items to include in compute JSON
+                    items = self.db.execute(select(BOQItem).where(BOQItem.boq_id == boq_id)).scalars().all()
+                    items_payload = []
+                    for it in items:
+                        items_payload.append({
+                            "boq_item_id": it.boq_item_id if getattr(it, "boq_item_id", None) is not None else None,
+                            "material_name": it.material_name,
+                            "rule_item_id": it.rule_item_id,
+                            "category_id": it.category_id,
+                            "quantity": str(it.quantity) if it.quantity is not None else None,
+                            "unit": it.unit,
+                        })
+
+                    compute_payload = {
+                        "rule_set_id": rs_id,
+                        "boq_id": boq_id,
+                        "items_created": count,
+                        "items": items_payload,
+                    }
+
+                    # Store the LLM rule-selection JSON into BOQ.compute_json (the rules_result
+                    # coming from the select_rules node), not the whole compute payload.
+                    boq_obj = self.db.get(BOQ, boq_id)
+                    if boq_obj:
+                        try:
+                            # Start from the rules_result produced earlier
+                            rules_json = state.get("rules_result") or {}
+                            boq_obj.compute_json = json.dumps(rules_json, ensure_ascii=False)
+                            self.db.add(boq_obj)
+                            self.db.commit()
+                        except Exception:
+                            self.db.rollback()
+
+                    # Upsert BOQ items into `benchmark_materials` by (project_id, name).
+                    # Store quantity, unit and a notes JSON with source ids for traceability.
+                    materials_payload = []
+                    for it in items:
+                        try:
+                            name = it.material_name or ""
+                            existing = self.db.query(BenchmarkMaterial).filter(
+                                BenchmarkMaterial.project_id == state["project_id"],
+                                BenchmarkMaterial.name == name,
+                            ).first()
+                            notes_obj = {
+                                "source": "boq_item",
+                                "boq_id": boq_id,
+                                "boq_item_id": getattr(it, "boq_item_id", None),
+                                "rule_item_id": getattr(it, "rule_item_id", None),
+                            }
+                            if existing:
+                                # update existing record quantity/unit/notes
+                                existing.quantity = it.quantity
+                                existing.unit = it.unit
+                                # append trace info to notes
+                                try:
+                                    prev = existing.notes or ""
+                                    existing.notes = prev + "\n" + json.dumps(notes_obj, ensure_ascii=False)
+                                except Exception:
+                                    existing.notes = json.dumps(notes_obj, ensure_ascii=False)
+                                self.db.add(existing)
+                                self.db.commit()
+                                bm_id = existing.benchmark_material_id
+                            else:
+                                bm = BenchmarkMaterial(
+                                    user_id=state["user_id"],
+                                    project_id=state["project_id"],
+                                    category_id=None,
+                                    name=name,
+                                    quantity=it.quantity,
+                                    unit=it.unit,
+                                    default_wastage_multiplier=1.0,
+                                    notes=json.dumps(notes_obj, ensure_ascii=False),
+                                )
+                                self.db.add(bm)
+                                self.db.commit()
+                                bm_id = bm.benchmark_material_id
+
+                            materials_payload.append({
+                                "benchmark_material_id": bm_id,
+                                "name": name,
+                                "quantity": str(it.quantity) if it.quantity is not None else None,
+                                "unit": it.unit,
+                                "boq_item_id": getattr(it, "boq_item_id", None),
+                            })
+                        except Exception:
+                            try:
+                                self.db.rollback()
+                            except Exception:
+                                pass
+                            logger.exception("Node[compute_boq]: failed to upsert benchmark_material for boq_item=%s", getattr(it, "boq_item_id", None))
+
+                    # Attach benchmark_materials info to compute_payload for API response
+                    compute_payload["benchmark_materials"] = materials_payload
+
+                    boqs.append({"rule_set_id": rs_id, "boq_id": boq_id, "items_created": count, "compute": compute_payload})
+                    total_items += count
+                    logger.info("Node[compute_boq]: created boq_id=%s for rule_set_id=%s items=%s", boq_id, rs_id, count)
+                except Exception as e:
+                    logger.exception("Node[compute_boq]: failed for rule_set_id=%s", rs_id)
+                    boqs.append({"rule_set_id": rs_id, "error": str(e)})
+
+            state["compute_result"] = {"boqs": boqs, "items_created_total": total_items}
+            logger.info("Node[compute_boq]: done | boqs_count=%s items_total=%s", len(boqs), total_items)
             return state
         except Exception as e:
             state["compute_result"] = {"error": str(e)}

@@ -5,6 +5,7 @@ from typing import Dict, Any, Tuple, List, Optional
 
 from sqlalchemy.orm import Session
 from sqlalchemy import select
+import logging
 
 from app.models.validation_attempts import ValidationAttempt
 from app.models.rule_set import RuleSet
@@ -91,9 +92,18 @@ def _derive_metrics(payload: Dict[str, Any], rules: Dict[str, RuleItem]) -> Dict
     metrics["floor_area_m2"] = total_area
 
     # Slab volume if thickness provided via rules
-    if "slab_thickness_m" in rules and rules["slab_thickness_m"].value is not None:
-        thickness = Decimal(str(rules["slab_thickness_m"].value))
-        metrics["slab_volume_m3"] = total_area * thickness
+    # Accept either 'slab_thickness_m' or common alternatives like 'screed_thickness_m'
+    thickness_key = None
+    for candidate in ("slab_thickness_m", "screed_thickness_m", "floor_slab_thickness_m"):
+        if candidate in rules and getattr(rules[candidate], "value", None) is not None:
+            thickness_key = candidate
+            break
+    if thickness_key:
+        try:
+            thickness = Decimal(str(rules[thickness_key].value))
+            metrics["slab_volume_m3"] = total_area * thickness
+        except Exception:
+            pass
     return metrics
 
 
@@ -105,6 +115,8 @@ def _compute_items(
 ) -> List[BOQItem]:
     items: List[BOQItem] = []
     trace_common = {k: str(v) for k, v in metrics.items()}
+    logger = logging.getLogger("procureminds.boq_compute")
+    logger.info("compute_items:start | rules_count=%s metrics=%s", len(rules_by_key), trace_common)
 
     # Build master map: category -> key -> {unit, default_value}
     master_map: Dict[str, Dict[str, Dict[str, Optional[str]]]] = {}
@@ -120,17 +132,27 @@ def _compute_items(
             "unit": mi.unit,
             "default_value": mi.default_value,
         }
+    logger.info("compute_items:master_map_categories=%s", list(master_map.keys()))
+    # show sample master entries for debugging
+    for c, m in list(master_map.items())[:5]:
+        logger.debug("compute_items:master_map[%s] keys=%s", c, list(m.keys())[:10])
 
     def add_item(material_name: str, key: str, base_metric: str):
         rule = rules_by_key.get(key)
         if not rule:
+            logger.debug("add_item:skip missing rule for key=%s", key)
             return
         category_name = key_category.get(key)
         rate, unit, basis = _rule_rate(rule, category_name=category_name, master_map=master_map)
         if rate is None or unit is None:
+            logger.debug(
+                "add_item:skip rate/unit missing | key=%s rate=%s unit=%s category=%s",
+                key, rate, unit, category_name,
+            )
             return
         metric_val = metrics.get(base_metric)
         if metric_val is None:
+            logger.debug("add_item:skip missing metric | key=%s base_metric=%s", key, base_metric)
             return
         qty = metric_val * rate
         item = BOQItem(
@@ -196,6 +218,10 @@ def compute_boq(
 
     payload = attempt.extracted_payload or {}
     metrics = _derive_metrics(payload, rules_by_key)
+    # Log derived metrics and available rule keys for diagnostics
+    logger = logging.getLogger("procureminds.boq_compute")
+    logger.info("compute_boq:derived_metrics=%s", {k: str(v) for k, v in metrics.items()})
+    logger.info("compute_boq:rules_keys=%s", list(rules_by_key.keys()))
 
     # Optionally store metrics on attempt for reuse
     attempt.derived_metrics = {k: str(v) for k, v in metrics.items()}
