@@ -245,19 +245,40 @@ class WorkflowGraph:
             wanted_names = set()
 
             # If the user explicitly provided a category/type in the extracted payload, prefer that
-            # (generate BOQ only for that category).
+            # (generate BOQ only for that BOQ category). If no category is provided, select all master
+            # rule sets by default (per current flow requirements).
             if attempt_payload and isinstance(attempt_payload, dict):
                 user_cat = None
                 if isinstance(attempt_payload.get("category"), str):
                     user_cat = attempt_payload.get("category").strip().lower()
                 elif isinstance(attempt_payload.get("type"), str):
                     user_cat = attempt_payload.get("type").strip().lower()
+
                 if user_cat:
-                    matched = [m for m in masters if (cat_by_id.get(m.category_id, "").lower().find(user_cat) != -1) or (m.name.lower().find(user_cat) != -1)]
-                    if matched:
-                        wanted_names = {m.name for m in matched}
+                    # Try to match provided category against BOQCategory names (exact-ish match)
+                    matched_cat_id = None
+                    for cid, cname in cat_by_id.items():
+                        n = (cname or "").strip().lower()
+                        if n == user_cat or n.replace(" ", "_") == user_cat or n.replace("_", " ") == user_cat:
+                            matched_cat_id = cid
+                            break
+
+                    if matched_cat_id is not None:
+                        matched = [m for m in masters if m.category_id == matched_cat_id]
+                        if matched:
+                            wanted_names = {m.name for m in matched}
+                            skip_llm = True
+                            logger.info("Node[select_rules]: user requested BOQ category '%s' -> selecting %s masters", user_cat, len(wanted_names))
+                    else:
+                        # Unknown category value provided — fall back to selecting all master rule sets
+                        wanted_names = {m.name for m in masters}
                         skip_llm = True
-                        logger.info("Node[select_rules]: user requested category '%s' -> selecting %s masters", user_cat, len(wanted_names))
+                        logger.info("Node[select_rules]: user provided category '%s' not matched -> selecting ALL master rule sets (%s)", user_cat, len(wanted_names))
+                else:
+                    # No explicit category provided: select all master rule sets by default
+                    wanted_names = {m.name for m in masters}
+                    skip_llm = True
+                    logger.info("Node[select_rules]: no category provided -> selecting all master rule sets (%s)", len(wanted_names))
 
             # If the user provided only basic room geometry (rooms with dimensions) and nothing else,
             # we should generate BOQs for all master rule sets (all categories) using master defaults.
@@ -450,6 +471,7 @@ class WorkflowGraph:
                     boq_obj = self.db.get(BOQ, boq_id)
                     if boq_obj:
                         try:
+                            # Start from the rules_result produced earlier
                             rules_json = state.get("rules_result") or {}
                             boq_obj.compute_json = json.dumps(rules_json, ensure_ascii=False)
                             self.db.add(boq_obj)
