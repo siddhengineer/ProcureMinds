@@ -18,6 +18,7 @@ from app.models.rule_item import RuleItem
 from app.models.boq import BOQ
 from app.models.boq_item import BOQItem
 from app.models.validation_attempts import ValidationAttempt
+from app.models.benchmarks import BenchmarkMaterial
 from app.core.config import settings
 
 
@@ -444,16 +445,78 @@ class WorkflowGraph:
                         "items": items_payload,
                     }
 
-                    # Persist compute_json into BOQ row
+                    # Store the LLM rule-selection JSON into BOQ.compute_json (the rules_result
+                    # coming from the select_rules node), not the whole compute payload.
                     boq_obj = self.db.get(BOQ, boq_id)
                     if boq_obj:
                         try:
-                            boq_obj.compute_json = json.dumps(compute_payload, ensure_ascii=False)
-                            # Do not generate or set pdf_link here; leave it null for now per request
+                            rules_json = state.get("rules_result") or {}
+                            boq_obj.compute_json = json.dumps(rules_json, ensure_ascii=False)
                             self.db.add(boq_obj)
                             self.db.commit()
                         except Exception:
                             self.db.rollback()
+
+                    # Upsert BOQ items into `benchmark_materials` by (project_id, name).
+                    # Store quantity, unit and a notes JSON with source ids for traceability.
+                    materials_payload = []
+                    for it in items:
+                        try:
+                            name = it.material_name or ""
+                            existing = self.db.query(BenchmarkMaterial).filter(
+                                BenchmarkMaterial.project_id == state["project_id"],
+                                BenchmarkMaterial.name == name,
+                            ).first()
+                            notes_obj = {
+                                "source": "boq_item",
+                                "boq_id": boq_id,
+                                "boq_item_id": getattr(it, "boq_item_id", None),
+                                "rule_item_id": getattr(it, "rule_item_id", None),
+                            }
+                            if existing:
+                                # update existing record quantity/unit/notes
+                                existing.quantity = it.quantity
+                                existing.unit = it.unit
+                                # append trace info to notes
+                                try:
+                                    prev = existing.notes or ""
+                                    existing.notes = prev + "\n" + json.dumps(notes_obj, ensure_ascii=False)
+                                except Exception:
+                                    existing.notes = json.dumps(notes_obj, ensure_ascii=False)
+                                self.db.add(existing)
+                                self.db.commit()
+                                bm_id = existing.benchmark_material_id
+                            else:
+                                bm = BenchmarkMaterial(
+                                    user_id=state["user_id"],
+                                    project_id=state["project_id"],
+                                    category_id=None,
+                                    name=name,
+                                    quantity=it.quantity,
+                                    unit=it.unit,
+                                    default_wastage_multiplier=1.0,
+                                    notes=json.dumps(notes_obj, ensure_ascii=False),
+                                )
+                                self.db.add(bm)
+                                self.db.commit()
+                                bm_id = bm.benchmark_material_id
+
+                            materials_payload.append({
+                                "benchmark_material_id": bm_id,
+                                "name": name,
+                                "quantity": str(it.quantity) if it.quantity is not None else None,
+                                "unit": it.unit,
+                                "boq_item_id": getattr(it, "boq_item_id", None),
+                            })
+                        except Exception:
+                            try:
+                                self.db.rollback()
+                            except Exception:
+                                pass
+                            logger.exception("Node[compute_boq]: failed to upsert benchmark_material for boq_item=%s", getattr(it, "boq_item_id", None))
+
+                    # Attach benchmark_materials info to compute_payload for API response
+                    compute_payload["benchmark_materials"] = materials_payload
 
                     boqs.append({"rule_set_id": rs_id, "boq_id": boq_id, "items_created": count, "compute": compute_payload})
                     total_items += count
