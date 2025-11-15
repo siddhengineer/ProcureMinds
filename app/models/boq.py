@@ -22,3 +22,4 @@ class BOQ(Base):
     user = relationship("User")
     items = relationship("BOQItem", back_populates="boq", cascade="all, delete-orphan")
     csv_files = relationship("BOQCSV", back_populates="boq", cascade="all, delete-orphan")
+    rfqs = relationship("RFQ", back_populates="boq", cascade="all, delete-orphan")

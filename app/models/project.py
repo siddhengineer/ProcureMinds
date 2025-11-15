@@ -16,3 +16,4 @@ class Project(Base):
 
     user = relationship("User", back_populates="projects")
     emails = relationship("Email", back_populates="project", cascade="all, delete-orphan")
+    rfqs = relationship("RFQ", back_populates="project", cascade="all, delete-orphan")
