@@ -1,10 +1,11 @@
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy.orm import Session
-from typing import Optional
+from typing import Optional, List
 import logging
 
 from app.core.database import get_db
 from app.summary.summarizer import analyze_best_vendor
+from app.summary.summary_queries import get_emails_by_project_and_user
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -63,4 +64,55 @@ async def analyze_project_vendors(
         raise HTTPException(
             status_code=500,
             detail=f"Failed to analyze vendors: {str(e)}"
+        )
+
+
+
+@router.get("/emails/{project_id}")
+async def get_inbox_emails(
+    project_id: int,
+    user_id: Optional[int] = None,
+    db: Session = Depends(get_db)
+):
+    """
+    Get all inbox emails with their summaries for a project.
+    
+    Args:
+        project_id: The project ID to get emails for
+        user_id: Optional user ID to filter emails (if None, returns all users)
+        
+    Returns:
+        List of emails with mail_id, vendor_email, message, summary, scores, and timestamps
+    """
+    try:
+        logger.info(f"Fetching emails for project {project_id}, user_id: {user_id}")
+        
+        emails = get_emails_by_project_and_user(
+            db=db,
+            project_id=project_id,
+            user_id=user_id
+        )
+        
+        if not emails:
+            return {
+                "status": "success",
+                "message": "No emails found",
+                "total_count": 0,
+                "emails": []
+            }
+        
+        logger.info(f"Found {len(emails)} emails for project {project_id}")
+        
+        return {
+            "status": "success",
+            "message": f"Retrieved {len(emails)} emails",
+            "total_count": len(emails),
+            "emails": emails
+        }
+        
+    except Exception as e:
+        logger.error(f"Error fetching emails for project {project_id}: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to fetch emails: {str(e)}"
         )
