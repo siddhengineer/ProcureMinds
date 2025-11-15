@@ -17,6 +17,8 @@ polling_task: Optional[asyncio.Task] = None
 is_polling = False
 processed_email_ids: Set[str] = set()  # Track processed email IDs
 polling_start_time: Optional[datetime] = None
+current_user_id: Optional[int] = None
+current_project_id: Optional[int] = None
 
 def get_imap_credentials():
     """Get IMAP credentials from environment variables."""
@@ -158,7 +160,7 @@ async def start_polling(user_id: int, project_id: int, db: Session = Depends(get
         user_id: User ID for database records
         project_id: Project ID for database records
     """
-    global polling_task, is_polling, processed_email_ids
+    global polling_task, is_polling, processed_email_ids, current_user_id, current_project_id
     
     if is_polling:
         return {"status": "already_running", "message": "Email polling is already active"}
@@ -167,6 +169,8 @@ async def start_polling(user_id: int, project_id: int, db: Session = Depends(get
     processed_email_ids.clear()
     
     is_polling = True
+    current_user_id = user_id
+    current_project_id = project_id
     polling_task = asyncio.create_task(poll_emails(user_id, project_id, db))
     
     return {
@@ -180,7 +184,7 @@ async def start_polling(user_id: int, project_id: int, db: Session = Depends(get
 @router.post("/emails/stop-polling")
 async def stop_polling():
     """Stop the email polling task."""
-    global polling_task, is_polling
+    global polling_task, is_polling, current_user_id, current_project_id
     
     if not is_polling:
         return {"status": "not_running", "message": "Email polling is not active"}
@@ -194,6 +198,10 @@ async def stop_polling():
         except asyncio.CancelledError:
             pass
     
+    # Clear the current project/user info
+    current_user_id = None
+    current_project_id = None
+    
     return {"status": "stopped", "message": "Email polling stopped"}
 
 @router.get("/emails/polling-status")
@@ -201,5 +209,9 @@ async def get_polling_status():
     """Get the current status of email polling."""
     return {
         "is_polling": is_polling,
-        "status": "running" if is_polling else "stopped"
+        "status": "running" if is_polling else "stopped",
+        "user_id": current_user_id,
+        "project_id": current_project_id,
+        "polling_start_time": polling_start_time.isoformat() if polling_start_time else None,
+        "processed_email_count": len(processed_email_ids)
     }
