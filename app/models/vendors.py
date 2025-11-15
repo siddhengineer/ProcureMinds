@@ -16,6 +16,7 @@ class Vendor(Base):
     user_id = Column(Integer, ForeignKey("users.user_id", ondelete="CASCADE"), nullable=False)
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
-    
+
     # Relationship
     user = relationship("User", back_populates="vendors")
+ 

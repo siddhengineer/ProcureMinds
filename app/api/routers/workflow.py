@@ -106,8 +106,6 @@ class ValidateAndGenerateRequest(BaseModel):
     user_id: int
     project_id: int | None = None
     raw_input_text: str
-    rule_set_name: str | None = "default"
-    preview: bool = False
 
 
 class ValidateAndGenerateResponse(BaseModel):
@@ -123,8 +121,6 @@ async def validate_and_generate(payload: ValidateAndGenerateRequest, db: Session
             user_id=payload.user_id,
             project_id=payload.project_id,
             raw_input_text=payload.raw_input_text,
-            rule_set_name=payload.rule_set_name or "default",
-            preview=payload.preview,
         )
         validation_dict = res.get("validation_result") or {}
         # If validation failed, surface 400 with concise details; rules generation will not run
@@ -142,6 +138,11 @@ async def validate_and_generate(payload: ValidateAndGenerateRequest, db: Session
         validation = ValidationResponse(**validation_dict)
         rules_dict = res.get("rules_result") or {}
         rules = RulesResult(**rules_dict)
-        return ValidateAndGenerateResponse(validation=validation, rules=rules)
+        # Attach CSV link if available
+        csv_result = res.get("csv_result") or {}
+        response = ValidateAndGenerateResponse(validation=validation, rules=rules)
+        if csv_result.get("csv_link"):
+            response.csv_link = csv_result["csv_link"]
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

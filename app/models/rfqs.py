@@ -1,12 +1,9 @@
 from sqlalchemy import Column, Integer, String, Text, TIMESTAMP, ForeignKey, Boolean, func
 from sqlalchemy.orm import relationship
-
 from app.core.database import Base
-
 
 class RFQ(Base):
     __tablename__ = "rfqs"
-
     rfq_id = Column(Integer, primary_key=True, index=True)
     incoming_mail = Column(Text, nullable=True)  # Store the incoming email content
     outgoing_mail = Column(Text, nullable=True)  # Store the outgoing RFQ email content
@@ -19,7 +16,6 @@ class RFQ(Base):
     subject = Column(String(500), nullable=True)  # Email subject
     created_at = Column(TIMESTAMP, server_default=func.now())
     updated_at = Column(TIMESTAMP, server_default=func.now(), onupdate=func.now())
-    
     # Relationships
     user = relationship("User", back_populates="rfqs")
     vendor = relationship("Vendor", back_populates="rfqs")

@@ -136,6 +136,7 @@ def _compute_items(
         item = BOQItem(
             material_name=material_name,
             rule_item_id=rule.rule_item_id,
+            category_id=rule.category_id,
             quantity=qty,
             unit=unit,
             quantity_basis="absolute",
