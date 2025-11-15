@@ -46,10 +46,30 @@ def get_projects(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Get all projects for the current user"""
     projects = db.query(Project).filter(
         Project.user_id == current_user.user_id
     ).order_by(Project.created_at.desc()).all()
     return projects
+
+
+@router.get("/list/simple")
+def get_projects_simple(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get simplified project list for dropdowns (id and name only)"""
+    projects = db.query(
+        Project.project_id,
+        Project.name
+    ).filter(
+        Project.user_id == current_user.user_id
+    ).order_by(Project.created_at.desc()).all()
+    
+    return [
+        {"project_id": p.project_id, "name": p.name}
+        for p in projects
+    ]
 
 
 @router.get("/{project_id}", response_model=ProjectResponse)

@@ -35,4 +35,6 @@ __all__ = [
 	"MasterRuleSet",
 	"MasterRuleItem",
 	"ValidationAttempt",
+	"rfqs",
+	"vendors"
 ]
