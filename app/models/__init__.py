@@ -18,6 +18,9 @@ from app.models.user import User
 from app.models.project_gmail_tokens import ProjectGmailToken
 from app.models.emails import Email
 from app.models.validation_attempts import ValidationAttempt
+from app.models.vendors import Vendor
+from app.models.rfqs import RFQ
+
 
 __all__ = [
 	"Workflow",

@@ -39,14 +39,14 @@ def get_project_benchmarks_json(project_id: int, db: Session) -> list[dict]:
 
     return benchmarks
 
-# if __name__ == "__main__":
-#     import json
-#     from app.core.database import SessionLocal  # Adjust if your session import is different
+if __name__ == "__main__":
+    import json
+    from app.core.database import SessionLocal  # Adjust if your session import is different
 
-#     project_id = 1  # Change to your desired project ID
-#     db = SessionLocal()
-#     try:
-#         benchmarks = get_project_benchmarks_json(project_id, db)
-#         print(json.dumps(benchmarks, indent=2, default=str))
-#     finally:
-#         db.close()
+    project_id = 1  # Change to your desired project ID
+    db = SessionLocal()
+    try:
+        benchmarks = get_project_benchmarks_json(project_id, db)
+        print(json.dumps(benchmarks, indent=2, default=str))
+    finally:
+        db.close()
