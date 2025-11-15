@@ -49,6 +49,13 @@ class Settings(BaseSettings):
     google_credentials_file: str | None = None
     google_token_file: str | None = None
 
+    # AWS S3 Configuration
+    aws_access_key_id: str | None = None
+    aws_secret_access_key: str | None = None
+    aws_s3_bucket: str | None = None
+    aws_s3_region: str = "eu-north-1"
+    aws_s3_base_url: str | None = None
+
     @property
     def database_url(self) -> str:
         return f"postgresql://{self.db_user}:{self.db_password}@{self.db_host}:{self.db_port}/{self.db_name}"
