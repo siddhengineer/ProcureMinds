@@ -3,12 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api.routers import imap_router, quotation_router, rfq_router
 from app.api.routers import summary_router  # Add this import
 from app.api.routers import vendor_router
+from app.api.routers import rfq_email_router
 from app.core.config import settings
 import logging
 from dotenv import load_dotenv
 import uvicorn
+import os
 
 from app.api.routers import workflow, auth, project, boq, imap_router, quotation_router, rfq_router
+from app.api.routers import boq_listing, rfq_listing
 from app.api import gmail
 from app.core.database import Base, engine
 from app.core.config import settings
@@ -59,6 +62,9 @@ app.include_router(quotation_router.router, prefix="/api/quotations", tags=["Quo
 app.include_router(rfq_router.router, prefix="/api/rfq", tags=["RFQ"])
 
 app.include_router(workflow_router, prefix="/api/workflows")
+app.include_router(rfq_email_router.router, prefix="/api")
+app.include_router(boq_listing.router, prefix="/api")
+app.include_router(rfq_listing.router, prefix="/api")
 
 
 @app.get("/")
@@ -76,4 +82,5 @@ def health_check():
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    port = int(os.getenv("PORT", 8000))
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)

@@ -19,3 +19,4 @@ class User(Base):
     projects = relationship("Project", back_populates="user", cascade="all, delete-orphan")
     emails = relationship("Email", back_populates="user", cascade="all, delete-orphan")
     vendors = relationship("Vendor", back_populates="user", cascade="all, delete-orphan")
+    rfqs = relationship("RFQ", back_populates="user", cascade="all, delete-orphan")
