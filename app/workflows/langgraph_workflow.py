@@ -95,6 +95,7 @@ class WorkflowGraph:
         workflow.add_node("validate", self.validation_node)
         workflow.add_node("select_rules", self.select_rules_from_master_node)
         workflow.add_node("compute_boq", self.compute_boq_node)
+        workflow.add_node("assemble_raw", self.assemble_raw_node)
 
         workflow.set_entry_point("input")
         workflow.add_edge("input", "validate")
@@ -114,6 +115,8 @@ class WorkflowGraph:
         )
         workflow.add_edge("select_rules", "compute_boq")
         workflow.add_edge("compute_boq", END)
+        workflow.add_edge("compute_boq", "assemble_raw")
+        workflow.add_edge("assemble_raw", END)
 
         return workflow.compile()
     
@@ -473,9 +476,39 @@ class WorkflowGraph:
                         try:
                             # Start from the rules_result produced earlier
                             rules_json = state.get("rules_result") or {}
-                            boq_obj.compute_json = json.dumps(rules_json, ensure_ascii=False)
+
+                            # Also assemble a compact raw payload for this rule_set (key, unit, value)
+                            rs_obj = self.db.get(RuleSet, rs_id)
+                            ri_objs = self.db.execute(select(RuleItem).where(RuleItem.rule_set_id == rs_id)).scalars().all()
+                            items_for_raw: list[dict[str, Any]] = []
+                            for ri in ri_objs:
+                                items_for_raw.append({
+                                    "key": getattr(ri, "key", None),
+                                    "unit": getattr(ri, "unit", None),
+                                    "value": getattr(ri, "value", None) if getattr(ri, "value", None) is not None else getattr(ri, "resolved_rate", None),
+                                })
+                            rs_name = getattr(rs_obj, "name", str(rs_id)) if rs_obj is not None else str(rs_id)
+                            raw_payload = {rs_name: {"rule_set_id": rs_id, "items": items_for_raw}}
+
+                            # Combine rules_result with the raw payload into compute_json so a single
+                            # column contains both LLM selection and the per-rule-set raw items.
+                            combined = {"rules_result": rules_json, "raw": raw_payload}
+                            try:
+                                combined_str = json.dumps(combined, ensure_ascii=False)
+                            except Exception:
+                                combined_str = str(combined)
+                            logger.info("Node[compute_boq]: writing compute_json for boq_id=%s (len=%s) snippet=%s", boq_id, len(combined_str), combined_str[:200])
+                            boq_obj.compute_json = combined_str
                             self.db.add(boq_obj)
-                            self.db.commit()
+                            try:
+                                self.db.commit()
+                                logger.info("Node[compute_boq]: successfully wrote compute_json for boq_id=%s", boq_id)
+                            except Exception:
+                                try:
+                                    self.db.rollback()
+                                except Exception:
+                                    pass
+                                logger.exception("Node[compute_boq]: failed to commit compute_json for boq_id=%s", boq_id)
                         except Exception:
                             self.db.rollback()
 
@@ -553,4 +586,104 @@ class WorkflowGraph:
         except Exception as e:
             state["compute_result"] = {"error": str(e)}
             logger.exception("Node[compute_boq]: error")
+            return state
+
+    async def assemble_raw_node(self, state: ValidationFlowState) -> ValidationFlowState:
+        """Assemble a compact raw JSON per BOQ containing RuleSet name -> list of RuleItems
+
+        Stored shape (example):
+        {
+          "CC-RCC-SLAB-M20": {
+              "rule_set_id": 71,
+              "items": [{"key": "cement_bags", "unit": "bags_per_m3", "value": 7.992}, ...]
+          },
+          "FLR-TILE-600x600-VIT": { ... }
+        }
+
+        This will be persisted to `BOQ.raw_json` for each BOQ created by `compute_boq_node`.
+        """
+        try:
+            logger.info("Node[assemble_raw]: start")
+            boqs = (state.get("compute_result") or {}).get("boqs") or []
+            if not boqs:
+                logger.info("Node[assemble_raw]: no boqs to process")
+                return state
+
+            for b in boqs:
+                try:
+                    rs_id = b.get("rule_set_id")
+                    boq_id = b.get("boq_id")
+                    if rs_id is None or boq_id is None:
+                        logger.warning("Node[assemble_raw]: missing rs_id or boq_id in boqs entry: %s", b)
+                        continue
+
+                    # Fetch rule set and items
+                    rs_obj = self.db.get(RuleSet, rs_id)
+                    ri_objs = self.db.execute(select(RuleItem).where(RuleItem.rule_set_id == rs_id)).scalars().all()
+
+                    items: List[Dict[str, Any]] = []
+                    for ri in ri_objs:
+                        items.append({
+                            "key": getattr(ri, "key", None),
+                            "unit": getattr(ri, "unit", None),
+                            "value": getattr(ri, "value", None) if getattr(ri, "value", None) is not None else getattr(ri, "resolved_rate", None),
+                        })
+
+                    rs_name = getattr(rs_obj, "name", str(rs_id)) if rs_obj is not None else str(rs_id)
+                    raw_payload = {rs_name: {"rule_set_id": rs_id, "items": items}}
+
+                    # Persist onto BOQ.raw_json if the model has that attribute
+                    boq_obj = self.db.get(BOQ, boq_id)
+                    if not boq_obj:
+                        logger.warning("Node[assemble_raw]: BOQ not found boq_id=%s", boq_id)
+                        continue
+
+                    # Merge the assembled raw payload into BOQ.compute_json (single canonical field)
+                    try:
+                        existing = {}
+                        if getattr(boq_obj, "compute_json", None):
+                            try:
+                                existing = json.loads(boq_obj.compute_json)
+                            except Exception:
+                                existing = {}
+
+                        # Merge raw payload into existing['raw'] while preserving any existing keys
+                        raw_section = existing.get("raw", {}) if isinstance(existing, dict) else {}
+                        # raw_payload is keyed by rule set name; update/overwrite those keys
+                        raw_section.update(raw_payload)
+                        if isinstance(existing, dict):
+                            existing["raw"] = raw_section
+                        else:
+                            existing = {"raw": raw_section}
+
+                        try:
+                            existing_str = json.dumps(existing, ensure_ascii=False)
+                        except Exception:
+                            existing_str = str(existing)
+                        logger.info("Node[assemble_raw]: writing merged compute_json for boq_id=%s (len=%s) snippet=%s", boq_id, len(existing_str), existing_str[:200])
+                        boq_obj.compute_json = existing_str
+                        self.db.add(boq_obj)
+                        try:
+                            self.db.commit()
+                            logger.info("Node[assemble_raw]: merged raw into compute_json for boq_id=%s rule_set_id=%s", boq_id, rs_id)
+                        except Exception:
+                            try:
+                                self.db.rollback()
+                            except Exception:
+                                pass
+                            logger.exception("Node[assemble_raw]: failed to commit merged compute_json for boq_id=%s", boq_id)
+                    except Exception:
+                        try:
+                            self.db.rollback()
+                        except Exception:
+                            pass
+                        logger.exception("Node[assemble_raw]: failed to merge raw into compute_json for boq_id=%s", boq_id)
+
+                except Exception:
+                    logger.exception("Node[assemble_raw]: failed processing boqs entry=%s", b)
+
+            logger.info("Node[assemble_raw]: done")
+            return state
+        except Exception as e:
+            logger.exception("Node[assemble_raw]: error")
             return state
