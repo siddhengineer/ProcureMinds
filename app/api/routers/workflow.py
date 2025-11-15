@@ -1,6 +1,7 @@
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -111,6 +112,7 @@ class ValidateAndGenerateRequest(BaseModel):
 class ValidateAndGenerateResponse(BaseModel):
     validation: ValidationResponse
     rules: RulesResult
+    compute: dict[str, Any] | None = None
 
 
 @router.post("/generate", response_model=ValidateAndGenerateResponse)
@@ -123,26 +125,26 @@ async def validate_and_generate(payload: ValidateAndGenerateRequest, db: Session
             raw_input_text=payload.raw_input_text,
         )
         validation_dict = res.get("validation_result") or {}
-        # If validation failed, surface 400 with concise details; rules generation will not run
+        # If validation failed, return a structured response indicating the error so
+        # the client can show a helpful message without a hard exception.
         if validation_dict.get("status") != "valid":
-            missing = ", ".join(validation_dict.get("missing_fields", []) or [])
-            invalid = ", ".join(validation_dict.get("invalid_fields", []) or [])
-            detail_parts = []
-            if missing:
-                detail_parts.append(f"missing: {missing}")
-            if invalid:
-                detail_parts.append(f"invalid: {invalid}")
-            detail = "; ".join(detail_parts) or "validation_failed"
-            raise HTTPException(status_code=400, detail=detail)
+            # Return a short, standardized 400 response for invalid/insufficient descriptions
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "API request failed",
+                    "message": "Incomplete or Invalid description.",
+                },
+            )
 
         validation = ValidationResponse(**validation_dict)
         rules_dict = res.get("rules_result") or {}
         rules = RulesResult(**rules_dict)
-        # Attach CSV link if available
-        csv_result = res.get("csv_result") or {}
-        response = ValidateAndGenerateResponse(validation=validation, rules=rules)
-        if csv_result.get("csv_link"):
-            response.csv_link = csv_result["csv_link"]
+        compute_dict = res.get("compute_result") or {}
+        response = ValidateAndGenerateResponse(validation=validation, rules=rules, compute=compute_dict)
         return response
+    except HTTPException:
+        # Re-raise HTTP exceptions (so their intended status codes are preserved)
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
